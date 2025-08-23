@@ -2,38 +2,57 @@ name: Deploy Invoice App
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
 
 jobs:
   build-deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      # 1️⃣ Checkout the repo
+      - name: Checkout code
         uses: actions/checkout@v3
 
+      # 2️⃣ Log in to Amazon ECR
       - name: Log in to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v1
 
+      # 3️⃣ Build Docker image
       - name: Build Docker image
         run: |
-          docker build -t invoice-app .
+          docker build -t invoice-app:latest .
           docker tag invoice-app:latest ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/invoice-app:latest
 
-      - name: Push to ECR
+      # 4️⃣ Push Docker image to ECR
+      - name: Push Docker image to ECR
         run: |
           docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/invoice-app:latest
 
-      - name: Deploy to EC2 via SSH
+      # 5️⃣ Deploy to EC2 via SSH
+      - name: Deploy to EC2
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
+            echo "Pulling latest image..."
             docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/invoice-app:latest
-            docker stop invoice-app || true
-            docker rm invoice-app || true
-            docker run -d -p 5000:5000 --name invoice-app \
-              -e MONGO_URI=${{ secrets.MONGO_URI }} \
+
+            # Stop old container if exists
+            if [ $(docker ps -q -f name=invoice-app) ]; then
+              echo "Stopping existing container..."
+              docker stop invoice-app
+              docker rm invoice-app
+            fi
+
+            # Run new container with restart policy
+            echo "Starting new container..."
+            docker run -d \
+              --name invoice-app \
+              -p 5000:5000 \
+              --restart unless-stopped \
+              -e MONGO_URI="${{ secrets.MONGO_URI }}" \
               ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/invoice-app:latest
+
+            echo "Deployment finished ✅"
