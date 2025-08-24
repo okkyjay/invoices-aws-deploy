@@ -12,7 +12,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # 1. Configure AWS credentials
+      # 1. Configure AWS credentials (for GitHub runner)
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -36,14 +36,16 @@ jobs:
           docker tag $REPO_NAME:$IMAGE_TAG $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$REPO_NAME:$IMAGE_TAG
           docker push $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$REPO_NAME:$IMAGE_TAG
 
-      # 4. Deploy to EC2 and setup Nginx
+      # 4. Deploy to EC2 and setup Nginx + Docker container
       - name: Deploy to EC2 and configure Nginx
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
-          username: ec2-user   # or "ubuntu" depending on AMI
+          username: ec2-user   # or "ubuntu" if you used Ubuntu AMI
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
+            set -e
+
             # Install Docker & Nginx if not installed
             sudo yum update -y
             sudo yum install -y docker nginx
@@ -52,9 +54,17 @@ jobs:
             sudo systemctl enable nginx
             sudo systemctl start nginx
 
-            # Login to ECR inside EC2 (fix for "no basic auth credentials")
-            aws ecr get-login-password --region ${{ secrets.AWS_REGION }} \
-              | sudo docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+            # Install AWS CLI v2 if not available (needed for docker login)
+            if ! command -v aws &> /dev/null
+            then
+              curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+              unzip awscliv2.zip
+              sudo ./aws/install
+            fi
+
+            # Login to ECR inside EC2
+            aws ecr get-login-password --region "${{ secrets.AWS_REGION }}" \
+              | sudo docker login --username AWS --password-stdin "${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com"
 
             # Configure Nginx reverse proxy
             cat <<EOF | sudo tee /etc/nginx/conf.d/invoice-app.conf
@@ -76,13 +86,18 @@ jobs:
             sudo systemctl reload nginx
 
             # Pull latest Docker image
-            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/invoice-app:latest
+            sudo docker pull "${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/invoice-app:latest"
 
             # Stop old container if exists
             sudo docker stop invoice-app || true
             sudo docker rm invoice-app || true
 
-            # Run new container
+            # Run new container with env vars
             sudo docker run -d -p 5000:5000 --name invoice-app \
-              -e MONGO_URI=${{ secrets.MONGO_URI }} \
-              ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/invoice-app:latest
+              -e "MONGO_URI=${{ secrets.MONGO_URI }}" \
+              "${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/invoice-app:latest"
+
+            # Print logs to debug if container exits
+            sleep 5
+            sudo docker ps -a
+            sudo docker logs invoice-app || true
