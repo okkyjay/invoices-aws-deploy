@@ -1,4 +1,4 @@
-name: build-deploy
+name: build-deploy-i
 
 on:
   push:
