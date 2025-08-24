@@ -1,64 +1,37 @@
-name: Deploy Invoice App
+name: build-deploy
 
 on:
   push:
-    branches: ["main"]
+    branches: [ "main" ]
 
 jobs:
-  build-deploy:
+  deploy:
     runs-on: ubuntu-latest
 
-    env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-
     steps:
-      # 1️⃣ Checkout code
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # 2️⃣ Log in to Amazon ECR
-      - name: Log in to Amazon ECR
-        uses: aws-actions/amazon-ecr-login@v1
+      # 1. Configure AWS credentials
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          region: ${{ secrets.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
-      # 3️⃣ Build Docker image
-      - name: Build Docker image
+      # 2. Log in to Amazon ECR
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # 3. Build, Tag, Push Docker Image
+      - name: Build, tag, and push docker image to Amazon ECR
         run: |
-          docker build -t invoice-app:latest .
-          docker tag invoice-app:latest ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/invoice-app:latest
+          IMAGE_TAG=latest
+          ACCOUNT_ID=${{ secrets.AWS_ACCOUNT_ID }}
+          REGION=${{ secrets.AWS_REGION }}
+          REPO_NAME=invoice-app
 
-      # 4️⃣ Push Docker image to ECR
-      - name: Push Docker image
-        run: |
-          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/invoice-app:latest
-
-      # 5️⃣ Deploy to EC2 via SSH
-      - name: Deploy to EC2
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ec2-user
-          key: ${{ secrets.EC2_SSH_KEY }}
-          script: |
-            echo "Pulling latest image..."
-            docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/invoice-app:latest
-
-            # Stop old container if exists
-            if [ $(docker ps -q -f name=invoice-app) ]; then
-              echo "Stopping existing container..."
-              docker stop invoice-app
-              docker rm invoice-app
-            fi
-
-            # Run new container with restart policy
-            echo "Starting new container..."
-            docker run -d \
-              --name invoice-app \
-              -p 5000:5000 \
-              --restart unless-stopped \
-              -e MONGO_URI="${{ secrets.MONGO_URI }}" \
-              ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/invoice-app:latest
-
-            echo "Deployment finished ✅"
+          docker build -t $REPO_NAME:$IMAGE_TAG .
+          docker tag $REPO_NAME:$IMAGE_TAG $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$REPO_NAME:$IMAGE_TAG
+          docker push $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$REPO_NAME:$IMAGE_TAG
