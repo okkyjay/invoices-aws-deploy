@@ -84,4 +84,5 @@ jobs:
 
             # Run new container
             sudo docker run -d -p 5000:5000 --name invoice-app \
+              -e MONGO_URI=${{ secrets.MONGO_URI }} \
               ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/invoice-app:latest
